@@ -147,54 +147,41 @@ __global__ void init_mask(bool *mask, int n)
 __global__ void get_mask(int *u, int *v, bool *mask, int n, int e, long int ful_vertices)
 {
 	int tid = threadIdx.x + blockDim.x*blockIdx.x;
-	bool flag = 0;
-
 	if (tid < e){
 		u[tid] = u[tid] + n - 1;
 		v[tid] = v[tid] + n - 1;
 		int src = u[tid];
 		int dest = v[tid];
-		__syncthreads();
-		if (!((u[tid] < ful_vertices && v[tid] < ful_vertices) || (u[tid] >= ful_vertices && v[tid] >= ful_vertices))) return; {
+
+		if (!((u[tid] < ful_vertices && v[tid] < ful_vertices) || (u[tid] >= ful_vertices && v[tid] >= ful_vertices))) {
 			if (u[tid] > v[tid]){
-				int src = u[tid];
-				int dest = v[tid];
 	 			int cur = Parent(u[tid]);
-				mask[(cur*n+src-n+1) << 1] = 1;
-				if (src == LeftChild(cur))
-					mask[(cur*n+dest-n+1) << 1] = 1;
+				mask[(cur*n+u[tid]-n+1) << 1] = 1;
+				if (u[tid] == LeftChild(cur))
+					mask[(cur*n+v[tid]-n+1) << 1] = 1;
 				else
-					mask[((cur*n+dest-n+1) << 1) + 1] = 1;
+					mask[((cur*n+v[tid]-n+1) << 1) + 1] = 1;
 				u[tid] = cur;
 			}	
 		 	else{
-				int src = v[tid];
-				int dest = u[tid];
 	 			int cur = Parent(v[tid]);
-				mask[(cur*n+src-n+1) << 1] = 1;
-				if (src == LeftChild(cur))
-					mask[(cur*n+dest-n+1) << 1] = 1;
+				mask[(cur*n+v[tid]-n+1) << 1] = 1;
+				if (v[tid] == LeftChild(cur))
+					mask[(cur*n+u[tid]-n+1) << 1] = 1;
 				else
-					mask[((cur*n+dest-n+1) << 1) + 1] = 1;
+					mask[((cur*n+u[tid]-n+1) << 1) + 1] = 1;
 				v[tid] = cur;
-				flag = 1;
 			}
 		}
 		
 		__syncthreads();
 
 		int lca = calculate_lca(u[tid], v[tid]);
-
-		if (flag == 0){
-			traversal(u[tid], lca, src, dest, mask, n);
-			traversal(v[tid], lca, dest, src, mask, n);
-		}
-		else{
-			traversal(v[tid], lca, src, dest, mask, n);
-			traversal(u[tid], lca, dest, src, mask, n);	
-		}
+		traversal(u[tid], lca, src, dest, mask, n);
+		traversal(v[tid], lca, dest, src, mask, n);
 	}
 }
+
 
 __global__ void get_hash(bool *mask, uint64_t *hash_value, int n)
 {
@@ -218,7 +205,7 @@ __global__ void get_hash(bool *mask, uint64_t *hash_value, int n)
 			do{
 				val=num%10 + 48;
 				num/=10;
-				str[i] = val;
+				str[count-i-1] = val;
 				i++;
 			}while(num !=0);
 			str[i] = 48+'\0';
@@ -296,15 +283,15 @@ __device__ void traversal(int prev, int lca, int src, int dest, bool *mask, int 
 {
 	int cur = Parent(prev);
 	while (cur != lca){
-		mask[(cur*n+src) << 1] = 1;
+		mask[(cur*n+src-n+1) << 1] = 1;
 		if (prev == LeftChild(cur))
-			mask[(cur*n+dest) << 1] = 1;
+			mask[(cur*n+dest-n+1) << 1] = 1;
 		else
-			mask[((cur*n+dest) << 1) + 1] = 1;
+			mask[((cur*n+dest-n+1) << 1) + 1] = 1;
 		prev = cur;
 		cur = Parent(cur);
 	}
-	mask[((cur*n+src) << 1) + 1] = 1;	
+	mask[((cur*n+src-n+1) << 1) + 1] = 1;	
 }
 
 int main ()
