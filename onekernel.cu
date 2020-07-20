@@ -35,15 +35,14 @@ __device__ static inline FORCE_INLINE uint64_t fmix64 ( uint64_t k )
   return k;
 }
 
-__device__ void MurmurHash3_x64_128 ( const char key[], const int len,
+__device__ void MurmurHash3_x64_128 ( int tid, const char key[], const int len,
                            const uint32_t seed, void * out1 , void * out2)
 {
   //const uint8_t * data = (const uint8_t*)key;
-
-  uint8_t data[10];
+  //printf("tid = %d, %c, %c, %c\n",tid,key[0],key[1],key[2]);
+  uint8_t data[16];
   for (int i=0; i<len; i++)
     data[i] = (uint8_t) key[i];
-
   const int nblocks = len / 16;
   int i;
 
@@ -58,7 +57,7 @@ __device__ void MurmurHash3_x64_128 ( const char key[], const int len,
 
   //const uint64_t * blocks = (const uint64_t *)(data);
 
-  uint64_t blocks[10];
+  uint64_t blocks[16];
   for (int i=0; i<len; i++)
     blocks[i] = (uint64_t) data[i];
 
@@ -81,7 +80,7 @@ __device__ void MurmurHash3_x64_128 ( const char key[], const int len,
 
   //const uint8_t * tail = (const uint8_t*)(data + nblocks*16);
 
-  uint8_t tail[10];
+  uint8_t tail[16];
   for (int i=0; i<len-nblocks*16; i++)
     tail[i] = (uint64_t) data[i+nblocks*16];
 
@@ -130,8 +129,10 @@ __device__ void MurmurHash3_x64_128 ( const char key[], const int len,
 }
 
 __device__ inline uint64_t NthHash(uint8_t n, uint64_t hashA, uint64_t hashB, uint64_t filter_size) {
-	//printf("%u and %u\n",hashA , hashB);
-	return (hashA + n * hashB) % filter_size;
+	//printf("%" PRIu64 " and %" PRIu64 " %u \n",hashA,hashB,((hashA + n * hashB) % filter_size));
+	//printf("%u\n",n);
+	//printf ("%u\n",((hashA + n * hashB) % filter_size));
+	return ((hashA + n * hashB) % filter_size);
 }
 
 __global__ void init_mask(bool *mask, int n)
@@ -143,56 +144,49 @@ __global__ void init_mask(bool *mask, int n)
 		mask[tid] = 0;
 }
 
+__global__ void init_bits(bool *bit, int n)
+{
+	int tid = threadIdx.x + blockDim.x*blockIdx.x;
+	if (tid < n)
+		bit[tid] = 0;
+}
+
 
 __global__ void get_mask(int *u, int *v, bool *mask, int n, int e, long int ful_vertices)
 {
 	int tid = threadIdx.x + blockDim.x*blockIdx.x;
-	bool flag = 0;
-
 	if (tid < e){
 		u[tid] = u[tid] + n - 1;
 		v[tid] = v[tid] + n - 1;
 		int src = u[tid];
 		int dest = v[tid];
-		__syncthreads();
-		if (!((u[tid] < ful_vertices && v[tid] < ful_vertices) || (u[tid] >= ful_vertices && v[tid] >= ful_vertices))) return; {
+
+		if (!((u[tid] < ful_vertices && v[tid] < ful_vertices) || (u[tid] >= ful_vertices && v[tid] >= ful_vertices))) {
 			if (u[tid] > v[tid]){
-				int src = u[tid];
-				int dest = v[tid];
 	 			int cur = Parent(u[tid]);
-				mask[(cur*n+src-n+1) << 1] = 1;
-				if (src == LeftChild(cur))
-					mask[(cur*n+dest-n+1) << 1] = 1;
+				mask[(cur*n+u[tid]-n+1) << 1] = 1;
+				if (u[tid] == LeftChild(cur))
+					mask[(cur*n+v[tid]-n+1) << 1] = 1;
 				else
-					mask[((cur*n+dest-n+1) << 1) + 1] = 1;
+					mask[((cur*n+v[tid]-n+1) << 1) + 1] = 1;
 				u[tid] = cur;
 			}	
 		 	else{
-				int src = v[tid];
-				int dest = u[tid];
 	 			int cur = Parent(v[tid]);
-				mask[(cur*n+src-n+1) << 1] = 1;
-				if (src == LeftChild(cur))
-					mask[(cur*n+dest-n+1) << 1] = 1;
+				mask[(cur*n+v[tid]-n+1) << 1] = 1;
+				if (v[tid] == LeftChild(cur))
+					mask[(cur*n+u[tid]-n+1) << 1] = 1;
 				else
-					mask[((cur*n+dest-n+1) << 1) + 1] = 1;
+					mask[((cur*n+u[tid]-n+1) << 1) + 1] = 1;
 				v[tid] = cur;
-				flag = 1;
 			}
 		}
 		
 		__syncthreads();
 
 		int lca = calculate_lca(u[tid], v[tid]);
-
-		if (flag == 0){
-			traversal(u[tid], lca, src, dest, mask, n);
-			traversal(v[tid], lca, dest, src, mask, n);
-		}
-		else{
-			traversal(v[tid], lca, src, dest, mask, n);
-			traversal(u[tid], lca, dest, src, mask, n);	
-		}
+		traversal(u[tid], lca, src, dest, mask, n);
+		traversal(v[tid], lca, dest, src, mask, n);
 	}
 }
 
@@ -218,13 +212,13 @@ __global__ void get_hash(bool *mask, uint64_t *hash_value, int n)
 			do{
 				val=num%10 + 48;
 				num/=10;
-				str[i] = val;
+				str[count-i-1] = val;
 				i++;
-			}while(num !=0);
+			}while(num !=0);	
 			str[i] = 48+'\0';
 			uint64_t len1 = (uint64_t) count;
 			size_t len = (size_t) len1;
-			MurmurHash3_x64_128(str, len, 0, (hash_value)+tid*2*sizeof(uint64_t), (hash_value)+(tid*2+1)*sizeof(uint64_t));
+			MurmurHash3_x64_128(tid, str, len, 0, (hash_value)+tid*2*sizeof(uint64_t), (hash_value)+(tid*2+1)*sizeof(uint64_t));
 		}
 	}
 }
@@ -235,27 +229,32 @@ __global__ void set_bloom(bool *bit, bool *mask, uint64_t *hash_value, int m, in
 	int hash = threadIdx.x;
 	uint64_t filter_size = (uint64_t) m;
 	uint8_t hash_no = (uint8_t) hash;
-	
 	if (val < n){
-		if (mask[val] == 1){
+		if (mask[val] == true){
 			if (hash < h){
-				bit[NthHash(hash_no,*(hash_value+2*val*sizeof(uint64_t)),*(hash_value+(2*val+1)*sizeof(uint64_t)), filter_size)] = 1;
+				bit[NthHash(hash_no,*(hash_value+2*val*sizeof(uint64_t)),*(hash_value+(2*val+1)*sizeof(uint64_t)), filter_size)] = true;
 			}
 		}
 	}
 }
 
-__global__ void check_bloom(volatile bool *found, bool *bit, bool *mask, uint64_t *hash_value, int m, int h, int n)
+__global__ void check_bloom(int *found, bool *bit, bool *mask, uint64_t *hash_value, int m, int h, int n)
 {
+	//volatile __shared__ bool someoneFoundIt;
+	//if (threadIdx.x == 0)  someoneFoundIt = found;
+    	//__syncthreads();
+
 	int val = blockIdx.x;
 	int hash = threadIdx.x;
 	uint64_t filter_size = (uint64_t) m;
 	uint8_t hash_no = (uint8_t) hash;
 	
-	if (!(*found) && (val < n)){
+	if (val < n && *found == 0){
 		if (mask[val] == 1){
-			if (hash < h){
-				if (bit[NthHash(hash_no,*(hash_value+2*val*sizeof(uint64_t)),*(hash_value+(2*val+1)*sizeof(uint64_t)), filter_size)] == 0) *found = true;
+			 if (hash < h){
+				if (bit[NthHash(hash_no,*(hash_value+2*val*sizeof(uint64_t)),*(hash_value+(2*val+1)*sizeof(uint64_t)), filter_size)] == 0){ 		
+					atomicAdd(found, 1); //printf("here");
+				}
 			}
 		}
 	}
@@ -294,7 +293,7 @@ __device__ int Sibling(int node)
 }
 
 __device__ int calculate_lca(int u, int v)
-{
+{	
 	int val1 = 0;
 	int val2 = 0;	
 	int i = 1;
@@ -312,15 +311,15 @@ __device__ void traversal(int prev, int lca, int src, int dest, bool *mask, int 
 {
 	int cur = Parent(prev);
 	while (cur != lca){
-		mask[(cur*n+src) << 1] = 1;
+		mask[(cur*n+src-n+1) << 1] = 1;
 		if (prev == LeftChild(cur))
-			mask[(cur*n+dest) << 1] = 1;
+			mask[(cur*n+dest-n+1) << 1] = 1;
 		else
-			mask[((cur*n+dest) << 1) + 1] = 1;
+			mask[((cur*n+dest-n+1) << 1) + 1] = 1;
 		prev = cur;
 		cur = Parent(cur);
 	}
-	mask[((cur*n+src) << 1) + 1] = 1;	
+	mask[((cur*n+src-n+1) << 1) + 1] = 1;	
 }
 
 void InsertEdge(int num_vertices, int num_edges, int num_hashes, int num_bits, int *h_u, int *h_v, bool *h_bits)
@@ -362,24 +361,38 @@ void InsertEdge(int num_vertices, int num_edges, int num_hashes, int num_bits, i
 	size_t size_bits = num_bits * sizeof(bool);
 	bool *d_bits = NULL;
         cudaMalloc((void **)&d_bits, size_bits);
+	//cudaMemset(d_bits, 0, size_bits);
+	init_bits<<<1,num_bits>>>(d_bits,num_bits);
 	set_bloom<<<num_vals,num_hashes>>>(d_bits,d_mask,d_hash_value,num_bits,num_hashes,num_vals);
 	
 	cudaDeviceSynchronize();	
 	cudaMemcpy(h_bits, d_bits, size_bits, cudaMemcpyDeviceToHost);
+
+	//dim3 tpb2(num_vertices,(4*(num_vertices-1)),1);
+	//dim3 bpg2(1,1,1);
+	//print_hash<<<bpg2,tpb2>>>(d_hash_value,num_vertices);
+	
+	//for (int i =0; i<num_bits; i++){
+	//	if (h_bits[i] == true) printf("%d, %d\n",i, h_bits[i]);
+	//}
 
 	cudaFree(d_mask);
 	cudaFree(d_hash_value);
 	cudaFree(d_bits);
 }
 
-bool IsEdge(int u, int v,int num_vertices, int num_edges, int num_hashes, int num_bits, bool *h_bits)
+bool IsEdge(int u, int v, int num_vertices, int num_hashes, int num_bits, bool *h_bits)
 {
 	size_t size = sizeof(int);
-	int *d_u = NULL, *d_v = NULL; 
+	int *d_u = NULL, *d_v = NULL;
+	int *h_eu = (int *)malloc(size);
+	int *h_ev = (int *)malloc(size); 
         cudaMalloc((void **)&d_u, size);
 	cudaMalloc((void **)&d_v, size);
-	d_u[0] = u;
-	d_v[0] = v;
+	h_eu[0] = u;
+	h_ev[0] = v;
+	cudaMemcpy(d_u,h_eu,size,cudaMemcpyHostToDevice);
+	cudaMemcpy(d_v,h_ev,size,cudaMemcpyHostToDevice);
 
 	int num_vals = 2*num_vertices*(num_vertices-1);
 	size_t size_mask = num_vals * sizeof(bool);
@@ -387,19 +400,18 @@ bool IsEdge(int u, int v,int num_vertices, int num_edges, int num_hashes, int nu
         cudaMalloc((void **)&d_mask, size_mask);
 	dim3 tpb(num_vertices,(2*(num_vertices-1)),1);
 	dim3 bpg(1,1,1);
-	//dim3 tpb(32,32,1);
-	//dim3 bpg(num_vertices/32,(num_vertices-1)/32,2);
 	init_mask<<<bpg,tpb>>>(d_mask,num_vertices);
 
-	//int tpb1 = 1024;
-        //int bpg1 = num_edges/1024;
-	int tpb1 = num_edges;
+	int tpb1 = 1;
         int bpg1 = 1;
 	int num_ful_levels = floor( log2((double) (2*num_vertices - 1)));
 	long int ful_vertices = pow((int) 2,(int) num_ful_levels) - 1;
-	get_mask<<<bpg1,tpb1>>>(d_u,d_v,d_mask,num_vertices,num_edges,ful_vertices);	
+	get_mask<<<bpg1,tpb1>>>(d_u,d_v,d_mask,num_vertices,1,ful_vertices);
+	
 	cudaFree(d_u);
 	cudaFree(d_v);
+	free(h_eu);
+	free(h_ev);
 
 	uint64_t *d_hash_value = NULL;
 	size_t size_hash = 2*num_vals*sizeof(uint64_t);
@@ -410,14 +422,26 @@ bool IsEdge(int u, int v,int num_vertices, int num_edges, int num_hashes, int nu
 	bool *d_bits = NULL;
         cudaMalloc((void **)&d_bits, size_bits);
 	cudaMemcpy(d_bits, h_bits, size_bits, cudaMemcpyHostToDevice);
-	volatile bool *found = false;
-	check_bloom<<<num_vals,num_hashes>>>(found,d_bits,d_mask,d_hash_value,num_bits,num_hashes,num_vals);
-	if (*found) return false;
-	else return true;
+
+	size_t size_f = sizeof(int);
+	int *d_found = NULL;
+	int *h_found = (int *)malloc(size_f);
+        cudaMalloc((void **)&d_found, size_f);
+	h_found[0] = 0;
+	cudaMemcpy(d_found,h_found,size,cudaMemcpyHostToDevice);
+	check_bloom<<<num_vals,num_hashes>>>(d_found,d_bits,d_mask,d_hash_value,num_bits,num_hashes,num_vals);
 
 	cudaFree(d_mask);
 	cudaFree(d_hash_value);
 	cudaFree(d_bits);
+
+	cudaMemcpy(h_found,d_found,size,cudaMemcpyDeviceToHost);
+
+	cudaDeviceSynchronize();
+	
+	if (*h_found>0) return 0;
+	else return 1;
+
 }
 
 int main ()
@@ -430,7 +454,7 @@ int main ()
 	scanf("%d",&num_hashes);
 
 	size_t size = num_edges * sizeof(int);
-	int num_vals = 2*num_vertices*(num_vertices-1);
+	//int num_vals = 2*num_vertices*(num_vertices-1);
 
 	int *h_u = (int *)malloc(size);
 	int *h_v = (int *)malloc(size);
@@ -445,10 +469,10 @@ int main ()
 	bool *h_bits = (bool *)malloc(size_bits);
 
 	InsertEdge(num_vertices, num_edges, num_hashes, num_bits, h_u, h_v, h_bits);
-	
-	//dim3 tpb2(num_vertices,(4*(num_vertices-1)),1);
-	//dim3 bpg2(1,1,1);
-	//print_hash<<<bpg2,tpb2>>>(d_hash_value,num_vertices);
+
+	bool val = IsEdge(8, 7, num_vertices, num_hashes, num_bits, h_bits);
+	if (val == 0) printf("It is NOT an edge.\n");
+	else printf("It is an edge.\n");
 
 	free(h_u);
 	free(h_v);
