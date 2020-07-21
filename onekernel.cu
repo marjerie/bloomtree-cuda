@@ -13,6 +13,8 @@ __device__ int RightChild(int node);
 __device__ int Sibling(int node);
 __device__ int calculate_lca(int u, int v);
 __device__ void traversal(int prev, int lca, int src, int dest, bool *mask, int n);
+__device__ void get_neighs(int *no, int src, int next, int cur, bool dir, bool *bit, int *neigh, uint64_t *hash_value, int n, int num, int m, int h);
+__device__ bool CheckBloom(int tid, uint64_t *hash_value, bool *bit, int h, int m);
 
 __device__ static inline FORCE_INLINE uint64_t rotl64 ( uint64_t x, int8_t r )
 {
@@ -258,7 +260,14 @@ __global__ void check_bloom(int *found, bool *bit, bool *mask, uint64_t *hash_va
 			}
 		}
 	}
-}	
+}
+
+__global__ void get_neighbours(int u, int *no, int *neighbour, uint64_t *hash_value, bool *bit, int m, int h, int n)
+{	
+	int src = u;
+	int num = 0;
+	get_neighs(no, src, Parent(src+n-1), src+n-1, 1, bit, neighbour, hash_value, n, num, m, h);
+}
 
 __global__ void print_hash(uint64_t *hash_value, int n)
 {
@@ -320,6 +329,60 @@ __device__ void traversal(int prev, int lca, int src, int dest, bool *mask, int 
 		cur = Parent(cur);
 	}
 	mask[((cur*n+src-n+1) << 1) + 1] = 1;	
+}
+
+__device__ void get_neighs(int *no, int src, int next, int cur, bool dir, bool *bit, int *neigh, uint64_t *hash_value, int n, int num, int m, int h)
+{
+	if (next < 0 || next >= ((n << 1) - 1)) return;
+	if (next >= n - 1) { 
+		*(neigh+num*sizeof(int)) = next - n + 1;
+		num++;
+		atomicAdd(no,1);
+		return;
+	}
+	if (dir && CheckBloom((((long)next * n + src) << 1),hash_value,bit,h,m) == 1) { 
+		get_neighs(no, src, Parent(next), next, dir, bit, neigh, hash_value, n, num, m, h);
+	}
+	if (dir && CheckBloom(((((long)next * n + src) << 1) + 1),hash_value,bit,h,m) == 1) { 
+		get_neighs(no, src, Sibling(cur), next, !dir, bit, neigh, hash_value, n, num, m, h);
+	}
+	if (!dir && CheckBloom((((long)next * n + src) << 1),hash_value,bit,h,m) == 1) { 
+		get_neighs(no, src, LeftChild(next), next, dir, bit, neigh, hash_value, n, num, m, h);
+	}
+	if (!dir && CheckBloom(((((long)next * n + src) << 1) + 1),hash_value,bit,h,m) == 1) { 
+		get_neighs(no, src, RightChild(next), next, dir, bit, neigh, hash_value, n, num, m, h);
+	}
+}
+
+__device__ bool CheckBloom(int tid, uint64_t *hash_value, bool *bit, int h, int m)
+{
+	int val=0;
+	int i =0;
+	int count=0; 	
+	int num = tid;
+	do{	
+		count++;
+		num /= 10;
+	} while(num != 0);
+	num = tid;
+	char str[10];
+	do{
+		val=num%10 + 48;
+		num/=10;
+		str[count-i-1] = val;
+		i++;
+	}while(num !=0);	
+	str[i] = 48+'\0';
+	uint64_t len1 = (uint64_t) count;
+	size_t len = (size_t) len1;
+	MurmurHash3_x64_128(tid, str, len, 0, hash_value, hash_value+sizeof(uint64_t));
+	
+	for (int i=0; i<h; h++){
+		if (bit[NthHash(i,*(hash_value),*(hash_value+sizeof(uint64_t)),m)] == 0){ 		
+			return false;
+		}
+	}
+	return true;
 }
 
 void InsertEdge(int num_vertices, int num_edges, int num_hashes, int num_bits, int *h_u, int *h_v, bool *h_bits)
@@ -444,6 +507,42 @@ bool IsEdge(int u, int v, int num_vertices, int num_hashes, int num_bits, bool *
 
 }
 
+void Neighbours(int u, int num_vertices, int num_hashes, int num_bits, bool *h_bits)
+{
+	/*size_t size = sizeof(int);
+	int *d_u = NULL;
+	int *h_nu = (int *)malloc(size);
+        cudaMalloc((void **)&d_u, size);
+	h_nu[0] = u;
+	cudaMemcpy(d_u,h_nu,size,cudaMemcpyHostToDevice);*/
+
+	uint64_t *d_hash_value = NULL;
+	size_t size_hash = 2*sizeof(uint64_t);
+	cudaMalloc((void **)&d_hash_value, size_hash);
+
+	size_t size_bits = num_bits * sizeof(bool);
+	bool *d_bits = NULL;
+        cudaMalloc((void **)&d_bits, size_bits);
+	cudaMemcpy(d_bits, h_bits, size_bits, cudaMemcpyHostToDevice);
+
+	int *d_neighs = NULL;
+	size_t size_neighs = (num_vertices-1)*sizeof(int);
+	int *h_neighs = (int *)malloc(size_neighs);
+	cudaMalloc((void **)&d_neighs, size_neighs);
+
+	int *d_no = NULL;
+	size_t size_no = sizeof(int);
+	int *h_no = (int *)malloc(size_no);
+	cudaMalloc((void **)&d_no, size_no);
+	get_neighbours<<<1,1>>>(u,d_no,d_neighs,d_hash_value,d_bits,num_bits,num_hashes,num_vertices);
+	cudaMemcpy(h_no, d_no, size_no, cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_neighs, d_neighs, size_neighs, cudaMemcpyDeviceToHost);
+	
+	printf("The neighbours are: \n");
+	for (int i=0; i<*h_no; i++)
+		printf("%d ",h_neighs[i]);
+}
+
 int main ()
 {
 
@@ -473,6 +572,8 @@ int main ()
 	bool val = IsEdge(8, 7, num_vertices, num_hashes, num_bits, h_bits);
 	if (val == 0) printf("It is NOT an edge.\n");
 	else printf("It is an edge.\n");
+
+	Neighbours(0, num_vertices, num_hashes, num_bits, h_bits);
 
 	free(h_u);
 	free(h_v);
