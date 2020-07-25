@@ -13,7 +13,9 @@ __device__ int RightChild(int node);
 __device__ int Sibling(int node);
 __device__ int calculate_lca(int u, int v);
 __device__ void traversal(int prev, int lca, int src, int dest, bool *mask, int n);
-__device__ void get_neighs(int *no, int src, int next, int cur, bool dir, bool *bit, int *neigh, uint64_t *hash_value, int n, int num, int m, int h);
+// void get_neighs(int *no, int src, int next, int cur,bool dir,bool *bit,int *neigh,uint64_t *hash_value,int n,int num,int m,int h);
+__device__ bool check_traversal_up(int prev, int lca, int src, int dest, int n, uint64_t *hash_value, bool *bit, int h, int m);
+__device__ bool check_traversal_down(int prev, int lca, int src, int dest, int n, uint64_t *hash_value, bool *bit, int h, int m);
 __device__ bool CheckBloom(int tid, uint64_t *hash_value, bool *bit, int h, int m);
 
 __device__ static inline FORCE_INLINE uint64_t rotl64 ( uint64_t x, int8_t r )
@@ -37,11 +39,14 @@ __device__ static inline FORCE_INLINE uint64_t fmix64 ( uint64_t k )
   return k;
 }
 
-__device__ void MurmurHash3_x64_128 ( int tid, const char key[], const int len,
+__device__ void MurmurHash3_x64_128 ( int tid, char key[], const int len,
                            const uint32_t seed, void * out1 , void * out2)
 {
   //const uint8_t * data = (const uint8_t*)key;
   //printf("tid = %d, %c, %c, %c\n",tid,key[0],key[1],key[2]);
+
+  //if (key[0]== 48) {printf("h "); key[0] = 48+'\0';}
+
   uint8_t data[16];
   for (int i=0; i<len; i++)
     data[i] = (uint8_t) key[i];
@@ -133,7 +138,7 @@ __device__ void MurmurHash3_x64_128 ( int tid, const char key[], const int len,
 __device__ inline uint64_t NthHash(uint8_t n, uint64_t hashA, uint64_t hashB, uint64_t filter_size) {
 	//printf("%" PRIu64 " and %" PRIu64 " %u \n",hashA,hashB,((hashA + n * hashB) % filter_size));
 	//printf("%u\n",n);
-	//printf ("%u\n",((hashA + n * hashB) % filter_size));
+	//printf ("nth %u\n",((hashA + n * hashB) % filter_size));
 	return ((hashA + n * hashB) % filter_size);
 }
 
@@ -262,11 +267,115 @@ __global__ void check_bloom(int *found, bool *bit, bool *mask, uint64_t *hash_va
 	}
 }
 
-__global__ void get_neighbours(int u, int *no, int *neighbour, uint64_t *hash_value, bool *bit, int m, int h, int n)
+/*__global__ void get_neighbours(int src, int *no, int *neigh, uint64_t *hash_value, bool *bit, int m, int h, int n)
 {	
-	int src = u;
 	int num = 0;
-	get_neighs(no, src, Parent(src+n-1), src+n-1, 1, bit, neighbour, hash_value, n, num, m, h);
+	int next = Parent(src+n-1);
+	int cur = src+n-1;
+	bool dir = 1;
+	*no = 0;
+
+	get_neighs(no, src, next, cur, dir, bit, neigh, hash_value, n, num, m, h);
+
+	printf("no value is %d\n",*no);
+
+	while (next >= 0 && next < ((n << 1) - 1)) {
+		printf("inside loop \n");
+		if (next >= n - 1) { 
+			*(neigh+num*sizeof(int)) = next - n + 1;
+			printf("neighbour found (%d) and num is %d\n",next - n + 1,num);
+			num++;
+			atomicAdd(no,1);
+			if (num >= 2 && *(neigh+(num-2)*sizeof(int)) == next-n+1){
+				*(neigh+(num-1)*sizeof(int)) = NULL;
+				atomicSub(no,1);
+				num--;
+				printf("the value of num is %d\n",num);
+		 		break;
+			}
+			else{
+				int next = Parent(src+n-1);
+				int cur = src+n-1;
+				bool dir = 1;	
+			}
+		}
+		if (dir && CheckBloom((((long)next * n + src) << 1),hash_value,bit,h,m) == 1) { 
+			cur = next;
+			next = Parent(next);
+		}
+		if (dir && CheckBloom(((((long)next * n + src) << 1) + 1),hash_value,bit,h,m) == 1) { 
+			int val = next;
+			next = Sibling(cur);
+			cur = val;
+			dir = !dir;
+		}
+		if (!dir && CheckBloom((((long)next * n + src) << 1),hash_value,bit,h,m) == 1) { 
+			cur = next;
+			next = LeftChild(next);
+		}
+		if (!dir && CheckBloom(((((long)next * n + src) << 1) + 1),hash_value,bit,h,m) == 1) {
+			cur = next;
+			next = RightChild(next);
+		}
+	}
+}*/
+
+__global__ void get_neighbours(int u,int *no,bool *neighs, uint64_t *hash_value, bool *bit, int m, int h, int n, long int ful_vertices)
+{
+	int tid = threadIdx.x;
+	int v=0;
+
+	if (tid < n){
+		
+		if (tid < u) v = tid;
+		else v = tid+1;
+
+		u = u + n - 1;
+		v = v + n - 1;
+		int src = u;
+		int dest = v;
+
+		if (!((u < ful_vertices && v < ful_vertices) || (u >= ful_vertices && v >= ful_vertices))) {
+			if (u > v){
+	 			int cur = Parent(u);
+				if (!(CheckBloom(((cur*n+u-n+1) << 1),hash_value,bit,h,m))) return;
+				//if (u[tid] == LeftChild(cur))
+				//	mask[(cur*n+v-n+1) << 1] = 1;
+				//else
+				//	mask[((cur*n+v-n+1) << 1) + 1] = 1;
+				u = cur;
+			}	
+		 	else{
+	 			int cur = Parent(v);
+				//mask[(cur*n+v-n+1) << 1] = 1;
+				if (v == LeftChild(cur))
+				{
+					if (!(CheckBloom(((cur*n+u-n+1) << 1),hash_value,bit,h,m))) 
+						return;
+				}
+				else
+				{
+					if (!(CheckBloom((((cur*n+u-n+1) << 1) + 1),hash_value,bit,h,m))) 
+						return;
+				}
+				v = cur;
+			}
+		}
+	
+		__syncthreads();
+
+		int lca = calculate_lca(u, v);
+
+		if (check_traversal_up(u, lca, src, dest, n, hash_value, bit, h, m)) 
+		{
+			if(check_traversal_down(v, lca, dest, src, n, hash_value, bit, h, m))
+			{
+				atomicAdd(no,1);
+				//printf("here and v is %d\n",dest-n+1);
+				*(neighs+(dest-n+1)*sizeof(bool)) = 1;
+			}
+		}
+	}
 }
 
 __global__ void print_hash(uint64_t *hash_value, int n)
@@ -331,57 +440,108 @@ __device__ void traversal(int prev, int lca, int src, int dest, bool *mask, int 
 	mask[((cur*n+src-n+1) << 1) + 1] = 1;	
 }
 
-__device__ void get_neighs(int *no, int src, int next, int cur, bool dir, bool *bit, int *neigh, uint64_t *hash_value, int n, int num, int m, int h)
+__device__ bool check_traversal_up(int prev, int lca, int src, int dest, int n, uint64_t *hash_value, bool *bit, int h, int m)  
+{
+	int cur = Parent(prev);
+	while (cur != lca){
+		if (!(CheckBloom(((cur*n+src-n+1) << 1),hash_value,bit,h,m)))  return false;
+		/*if (prev == LeftChild(cur))
+		{
+			if (!(CheckBloom(((cur*n+dest-n+1) << 1),hash_value,bit,h,m))) 
+				return false;
+		}
+		else
+		{
+			if (!(CheckBloom((((cur*n+dest-n+1) << 1) + 1),hash_value,bit,h,m))) 
+				return false;
+		}*/
+		prev = cur;
+		cur = Parent(cur);
+	}
+	if (!(CheckBloom((((cur*n+src-n+1) << 1) + 1),hash_value,bit,h,m)))  return false;
+	return true;	
+}
+
+__device__ bool check_traversal_down(int prev, int lca, int src, int dest, int n, uint64_t *hash_value, bool *bit, int h, int m) 
+{
+	int cur = Parent(prev);
+	while (cur != lca){
+		//if (!(CheckBloom(((cur*n+src-n+1) << 1),hash_value,bit,h,m))) return false;
+		if (prev == LeftChild(cur))
+		{
+			if (!(CheckBloom(((cur*n+dest-n+1) << 1),hash_value,bit,h,m)))  
+				return false;
+		}
+		else
+		{
+			if (!(CheckBloom((((cur*n+dest-n+1) << 1) + 1),hash_value,bit,h,m))) 
+				return false;
+		}
+		prev = cur;
+		cur = Parent(cur);
+		//printf("cur and lca is %d and %d for src %d\n",cur,lca,src);
+	}
+	//if (CheckBloom((((cur*n+src-n+1) << 1) + 1),hash_value,bit,h,m) == 0) return false;
+	return true;	
+}
+
+/*__device__ void get_neighs(int *no, int src, int next, int cur, bool dir,bool *bit,int *neigh,uint64_t *hash_value,int n,int num,int m,int h)
 {
 	if (next < 0 || next >= ((n << 1) - 1)) return;
 	if (next >= n - 1) { 
 		*(neigh+num*sizeof(int)) = next - n + 1;
 		num++;
+		//printf("%d\n",next-n+1);
 		atomicAdd(no,1);
 		return;
 	}
-	if (dir && CheckBloom((((long)next * n + src) << 1),hash_value,bit,h,m) == 1) { 
+	if (dir && CheckBloom((int)((next * n + src) << 1),hash_value,bit,h,m) == 1) { 
 		get_neighs(no, src, Parent(next), next, dir, bit, neigh, hash_value, n, num, m, h);
 	}
-	if (dir && CheckBloom(((((long)next * n + src) << 1) + 1),hash_value,bit,h,m) == 1) { 
+	if (dir && CheckBloom((int)(((next * n + src) << 1) + 1),hash_value,bit,h,m) == 1) {
 		get_neighs(no, src, Sibling(cur), next, !dir, bit, neigh, hash_value, n, num, m, h);
 	}
-	if (!dir && CheckBloom((((long)next * n + src) << 1),hash_value,bit,h,m) == 1) { 
+	if (!dir && CheckBloom((int)((next * n + src) << 1),hash_value,bit,h,m) == 1) { 
 		get_neighs(no, src, LeftChild(next), next, dir, bit, neigh, hash_value, n, num, m, h);
 	}
-	if (!dir && CheckBloom(((((long)next * n + src) << 1) + 1),hash_value,bit,h,m) == 1) { 
+	if (!dir && CheckBloom((int)(((next * n + src) << 1) + 1),hash_value,bit,h,m) == 1) { 
 		get_neighs(no, src, RightChild(next), next, dir, bit, neigh, hash_value, n, num, m, h);
 	}
-}
+}*/
+
 
 __device__ bool CheckBloom(int tid, uint64_t *hash_value, bool *bit, int h, int m)
 {
-	int val=0;
+	//printf("%d ",tid);
+	//int val=0;
 	int i =0;
 	int count=0; 	
 	int num = tid;
-	do{	
+	char str[10];
+	while(num != 0){	
 		count++;
 		num /= 10;
-	} while(num != 0);
+	} 
 	num = tid;
-	char str[10];
-	do{
-		val=num%10 + 48;
+	while(num !=0){	
+		str[count-i-1] = num%10 + '0';
 		num/=10;
-		str[count-i-1] = val;
 		i++;
-	}while(num !=0);	
+	}	
 	str[i] = 48+'\0';
+	//printf("h %c\n",str[i]);
 	uint64_t len1 = (uint64_t) count;
 	size_t len = (size_t) len1;
-	MurmurHash3_x64_128(tid, str, len, 0, hash_value, hash_value+sizeof(uint64_t));
+	//MurmurHash3_x64_128(tid, str, len, 0, (hash_value)+tid*2*sizeof(uint64_t), (hash_value)+(tid*2+1)*sizeof(uint64_t));
+	MurmurHash3_x64_128(tid, str, len, 0, (hash_value)+tid*2*sizeof(uint64_t), (hash_value)+(tid*2+1)*sizeof(uint64_t));
 	
-	for (int i=0; i<h; h++){
-		if (bit[NthHash(i,*(hash_value),*(hash_value+sizeof(uint64_t)),m)] == 0){ 		
+	for (int i=0; i<h; i++){
+		if (bit[NthHash(i,*((hash_value)+tid*2*sizeof(uint64_t)),*((hash_value)+(tid*2+1)*sizeof(uint64_t)),m)] == 0){
+			//printf("false %d\n",tid);
 			return false;
 		}
 	}
+	//printf("check true is %d\n",tid);
 	return true;
 }
 
@@ -516,8 +676,12 @@ void Neighbours(int u, int num_vertices, int num_hashes, int num_bits, bool *h_b
 	h_nu[0] = u;
 	cudaMemcpy(d_u,h_nu,size,cudaMemcpyHostToDevice);*/
 
+	//cudaError_t err = cudaSuccess;
+
+	int num_vals = 2*num_vertices*(num_vertices-1);
+
 	uint64_t *d_hash_value = NULL;
-	size_t size_hash = 2*sizeof(uint64_t);
+	size_t size_hash = 2*num_vals*sizeof(uint64_t);
 	cudaMalloc((void **)&d_hash_value, size_hash);
 
 	size_t size_bits = num_bits * sizeof(bool);
@@ -525,22 +689,34 @@ void Neighbours(int u, int num_vertices, int num_hashes, int num_bits, bool *h_b
         cudaMalloc((void **)&d_bits, size_bits);
 	cudaMemcpy(d_bits, h_bits, size_bits, cudaMemcpyHostToDevice);
 
-	int *d_neighs = NULL;
-	size_t size_neighs = (num_vertices-1)*sizeof(int);
-	int *h_neighs = (int *)malloc(size_neighs);
+	bool *d_neighs = NULL;
+	size_t size_neighs = (num_vertices)*sizeof(bool);
+	bool *h_neighs = (bool *)malloc(size_neighs);
 	cudaMalloc((void **)&d_neighs, size_neighs);
 
 	int *d_no = NULL;
 	size_t size_no = sizeof(int);
 	int *h_no = (int *)malloc(size_no);
 	cudaMalloc((void **)&d_no, size_no);
-	get_neighbours<<<1,1>>>(u,d_no,d_neighs,d_hash_value,d_bits,num_bits,num_hashes,num_vertices);
+	//get_neighbours<<<1,1>>>(u,d_no,d_neighs,d_hash_value,d_bits,num_bits,num_hashes,num_vertices);
+	
+	int num_ful_levels = floor( log2((double) (2*num_vertices - 1)));
+	long int ful_vertices = pow((int) 2,(int) num_ful_levels) - 1;
+
+	init_bits<<<1,num_vertices>>>(d_neighs,num_vertices);
+	get_neighbours<<<1,num_vertices-1>>>(u,d_no,d_neighs,d_hash_value,d_bits,num_bits,num_hashes,num_vertices,ful_vertices);
+
 	cudaMemcpy(h_no, d_no, size_no, cudaMemcpyDeviceToHost);
 	cudaMemcpy(h_neighs, d_neighs, size_neighs, cudaMemcpyDeviceToHost);
 	
+	printf("the no of neighbours are %d\n", *h_no);
 	printf("The neighbours are: \n");
-	for (int i=0; i<*h_no; i++)
-		printf("%d ",h_neighs[i]);
+	for (int i=0; i<num_vertices; i++)
+	{
+		if (h_neighs[i] == 1)
+			printf("%d\n",i);
+
+	}
 }
 
 int main ()
@@ -573,7 +749,7 @@ int main ()
 	if (val == 0) printf("It is NOT an edge.\n");
 	else printf("It is an edge.\n");
 
-	Neighbours(0, num_vertices, num_hashes, num_bits, h_bits);
+	Neighbours(8, num_vertices, num_hashes, num_bits, h_bits);
 
 	free(h_u);
 	free(h_v);
