@@ -43,7 +43,7 @@ __device__ void MurmurHash3_x64_128 ( int tid, char key[], const int len,
                            const uint32_t seed, void * out1 , void * out2)
 {
   //const uint8_t * data = (const uint8_t*)key;
-  //printf("tid = %d, %c, %c, %c\n",tid,key[0],key[1],key[2]);
+  //printf("tid = %d, %c, %c, %c, %c, %c, %c, %c, %c, %c\n",tid,key[0],key[1],key[2],key[3],key[4],key[5],key[6],key[7],key[8]);
 
   //if (key[0]== 48) {printf("h "); key[0] = 48+'\0';}
 
@@ -161,14 +161,15 @@ __global__ void init_bits(bool *array, int n)
 	}
 }
 
-__global__ void get_mask(int *u, int *v, bool *mask, int n, int e, long int ful_vertices)
+__global__ void get_mask(int *u, int *v, bool *mask, int n, int e, long int ful_vertices,long int valsperloop,int ii)
 {
-
 	int blockNum = blockIdx.z*(gridDim.x*gridDim.y)+blockIdx.y*gridDim.x+blockIdx.x;
 	int threadNum = threadIdx.z*(blockDim.x*blockDim.y)+threadIdx.y*blockDim.x+threadIdx.x;
 	int tid = blockNum*(blockDim.x*blockDim.y*blockDim.z)+threadNum;
 
-	if (tid < e){
+	long int tid1 = ii*valsperloop + tid;
+
+	if (tid1 < e){
 		u[tid] = u[tid] + n - 1;
 		v[tid] = v[tid] + n - 1;
 		int src = u[tid];
@@ -178,19 +179,23 @@ __global__ void get_mask(int *u, int *v, bool *mask, int n, int e, long int ful_
 			if (u[tid] > v[tid]){
 	 			int cur = Parent(u[tid]);
 				mask[(cur*n+u[tid]-n+1) << 1] = 1;
-				if (u[tid] == LeftChild(cur))
-					mask[(cur*n+v[tid]-n+1) << 1] = 1;
-				else
-					mask[((cur*n+v[tid]-n+1) << 1) + 1] = 1;
+				if (u[tid] == LeftChild(cur)){
+					mask[(cur*n+v[tid]-n+1) << 1] = 1; 
+				}
+				else{
+					mask[((cur*n+v[tid]-n+1) << 1) + 1] = 1; 
+				}
 				u[tid] = cur;
 			}	
 		 	else{
 	 			int cur = Parent(v[tid]);
 				mask[(cur*n+v[tid]-n+1) << 1] = 1;
-				if (v[tid] == LeftChild(cur))
-					mask[(cur*n+u[tid]-n+1) << 1] = 1;
-				else
-					mask[((cur*n+u[tid]-n+1) << 1) + 1] = 1;
+				if (v[tid] == LeftChild(cur)){
+					mask[(cur*n+u[tid]-n+1) << 1] = 1; 
+				}
+				else{
+					mask[((cur*n+u[tid]-n+1) << 1) + 1] = 1; 
+				}
 				v[tid] = cur;
 			}
 		}
@@ -198,6 +203,7 @@ __global__ void get_mask(int *u, int *v, bool *mask, int n, int e, long int ful_
 		__syncthreads();
 
 		int lca = calculate_lca(u[tid], v[tid]);
+
 		traversal(u[tid], lca, src, dest, mask, n);
 		traversal(v[tid], lca, dest, src, mask, n);
 	}
@@ -228,7 +234,7 @@ __global__ void SetBloom(bool *mask, uint64_t *hash_value, bool *bit, int h, int
 		str[i] = 48+'\0';
 		uint64_t len1 = (uint64_t) count;
 		size_t len = (size_t) len1;
-		MurmurHash3_x64_128(tid, str, len, 0, (hash_value)+tid*2*sizeof(uint64_t), (hash_value)+(tid*2+1)*sizeof(uint64_t));
+		MurmurHash3_x64_128(tid1, str, len, 0, (hash_value)+tid*2*sizeof(uint64_t), (hash_value)+(tid*2+1)*sizeof(uint64_t));	
 	
 		for (int i=0; i<h; i++){
 			bit[NthHash(i,*((hash_value)+tid*2*sizeof(uint64_t)),*((hash_value)+(tid*2+1)*sizeof(uint64_t)),m)] = 1;
@@ -359,10 +365,12 @@ __device__ void traversal(long int prev, long int lca, long int src, long int de
 	int cur = Parent(prev);
 	while (cur != lca){
 		mask[(cur*n+src-n+1) << 1] = 1;
-		if (prev == LeftChild(cur))
-			mask[(cur*n+dest-n+1) << 1] = 1;
-		else
-			mask[((cur*n+dest-n+1) << 1) + 1] = 1;
+		if (prev == LeftChild(cur)){
+			mask[(cur*n+dest-n+1) << 1] = 1; 
+		}
+		else{
+			mask[((cur*n+dest-n+1) << 1) + 1] = 1; 
+		} 
 		prev = cur;
 		cur = Parent(cur);
 	}
@@ -435,6 +443,7 @@ __device__ bool CheckBloom(long tid, uint64_t *hash_value, bool *bit, int h, int
 void InsertEdge(int num_vertices, int num_edges, int num_hashes, int num_bits, int *h_u, int *h_v, bool *h_bits)
 {
 
+	cudaError_t err = cudaSuccess;
 	size_t size = num_edges * sizeof(int);
 	int num_vals = 2*num_vertices*(num_vertices-1);
 
@@ -448,6 +457,7 @@ void InsertEdge(int num_vertices, int num_edges, int num_hashes, int num_bits, i
 	long int ful_vertices = pow((int) 2,(int) num_ful_levels) - 1;
 
 	size_t size_mask = num_vals * sizeof(bool);
+	//bool *h_mask = (bool *)malloc(size_mask);
 	bool *d_mask = NULL;
         cudaMalloc((void **)&d_mask, size_mask);
 
@@ -466,35 +476,75 @@ void InsertEdge(int num_vertices, int num_edges, int num_hashes, int num_bits, i
 	//init_mask<<<2,num_bits/2>>>(d_bits,num_bits);
 	cudaMemset(d_bits, 0, size_bits);
 
-	dim3 tpb1(32,16,1);
-        dim3 bpg1(num_edges/4096,4,2);
+	//int M = num_edges/4096;
+	//printf("M is %d\n",M);
 
-	get_mask<<<bpg1,tpb1>>>(d_u,d_v,d_mask,num_vertices,num_edges,ful_vertices);
+	dim3 tpb1(8,8,1);
+        dim3 bpg1(4,4,1);
+
+	long int valsperloop = 1 << 10;
+
+	int N = ceil(num_edges/valsperloop)+1;
+
+	printf("N is %d\n",N);
+
+	for (int i=0; i<N; i++){
+		get_mask<<<bpg1,tpb1>>>(d_u+i*valsperloop,d_v+i*valsperloop,d_mask,num_vertices,num_edges,ful_vertices,valsperloop,i);
+
+		cudaDeviceSynchronize();
+	
+		err = cudaGetLastError();
+
+		if (err != cudaSuccess)
+		{
+		    fprintf(stderr, "Failed to launch get_mask kernel %d (error code %s)!\n",i, cudaGetErrorString(err));
+		    exit(EXIT_FAILURE);
+		}
+	}
+
+	//get_mask<<<bpg1,tpb1>>>(d_u,d_v,d_mask,num_vertices,num_edges,ful_vertices);
 
 	uint64_t *d_hash_value = NULL;
 	size_t size_hash = 2*num_vals*sizeof(uint64_t);
 	cudaMalloc((void **)&d_hash_value, size_hash);
+
+	//cudaMemcpy(h_mask, d_mask, size_mask, cudaMemcpyDeviceToHost);
 	
 	cudaFree(d_u);
 	cudaFree(d_v);
 
-	dim3 tpb2(8,8,1);
-        dim3 bpg2(16,2,2);
+	dim3 tpb2(8,4,1);
+        dim3 bpg2(2,2,2);
 
-	long int valsperloop = 1 << 12;
+	valsperloop = 1 << 8;
 
-	int N = ceil(num_vals/valsperloop)+1;
+	N = ceil(num_vals/valsperloop)+1;
+
+	printf("N is %d\n",N);
 
 	for (int i=0; i<N; i++){
 		SetBloom<<<bpg2,tpb2>>>(d_mask+i*valsperloop,d_hash_value+i*2*valsperloop,d_bits,num_hashes,num_bits,valsperloop,i);
+
+		cudaDeviceSynchronize();
+	
+		err = cudaGetLastError();
+
+		if (err != cudaSuccess)
+		{
+		    fprintf(stderr, "Failed to launch SetBloom kernel %d (error code %s)!\n",i, cudaGetErrorString(err));
+		    exit(EXIT_FAILURE);
+		}
 	}
 
 	cudaMemcpy(h_bits, d_bits, size_bits, cudaMemcpyDeviceToHost);
 
-	//for (int i =0; i<num_bits; i++){
-	//	if (h_bits[i] == true) printf("%d\n",i);
-	//}
+	int value=0;
 
+	for (long i =0; i<num_bits; i++){
+		if (h_bits[i] == 1) value++;
+	}
+
+	printf("value is %d\n",value);
 	cudaFree(d_hash_value);
 	cudaFree(d_mask);
 	cudaFree(d_bits);
