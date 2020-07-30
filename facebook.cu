@@ -271,6 +271,8 @@ __global__ void get_neighbours(int u, bool *neighs, uint64_t *hash_value, bool *
 
 	long v=tid;
 
+	*(neighs+(tid)*sizeof(bool)) = 0;
+
 	if (tid < n && !(u==tid) ){
 
 		u = u + n - 1;
@@ -300,7 +302,7 @@ __global__ void get_neighbours(int u, bool *neighs, uint64_t *hash_value, bool *
 			}
 		}
 	
-		__syncthreads();
+		//__syncthreads();
 
 		int lca = calculate_lca(u, v);
 		if (check_traversal_up(u, lca, src, dest, n, hash_value+2*tid*sizeof(uint64_t), bit, h, m)) 
@@ -486,7 +488,7 @@ void InsertEdge(int num_vertices, int num_edges, int num_hashes, int num_bits, i
 
 	int N = ceil(num_edges/valsperloop)+1;
 
-	printf("N is %d\n",N);
+	//printf("N is %d\n",N);
 
 	for (int i=0; i<N; i++){
 		get_mask<<<bpg1,tpb1>>>(d_u+i*valsperloop,d_v+i*valsperloop,d_mask,num_vertices,num_edges,ful_vertices,valsperloop,i);
@@ -520,7 +522,7 @@ void InsertEdge(int num_vertices, int num_edges, int num_hashes, int num_bits, i
 
 	N = ceil(num_vals/valsperloop)+1;
 
-	printf("N is %d\n",N);
+	//printf("N is %d\n",N);
 
 	for (int i=0; i<N; i++){
 		SetBloom<<<bpg2,tpb2>>>(d_mask+i*valsperloop,d_hash_value+i*2*valsperloop,d_bits,num_hashes,num_bits,valsperloop,i);
@@ -540,11 +542,11 @@ void InsertEdge(int num_vertices, int num_edges, int num_hashes, int num_bits, i
 
 	int value=0;
 
-	for (long i =0; i<num_bits; i++){
-		if (h_bits[i] == 1) value++;
-	}
+	//for (long i =0; i<num_bits; i++){
+	//	if (h_bits[i] == 1) value++;
+	//}
 
-	printf("value is %d\n",value);
+	//printf("value is %d\n",value);
 	cudaFree(d_hash_value);
 	cudaFree(d_mask);
 	cudaFree(d_bits);
@@ -704,6 +706,10 @@ int main ()
 	scanf("%d",&num_bits);
 	scanf("%d",&num_hashes);
 
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+
 	size_t size = num_edges * sizeof(int);
 	//int num_vals = 2*num_vertices*(num_vertices-1);
 
@@ -721,7 +727,6 @@ int main ()
 
 	InsertEdge(num_vertices, num_edges, num_hashes, num_bits, h_u, h_v, h_bits);
 
-
 	uint64_t *d_hash_value = NULL;
 	size_t size_hash = 2*num_vertices*sizeof(uint64_t);
 	cudaMalloc((void **)&d_hash_value, size_hash);
@@ -734,14 +739,17 @@ int main ()
 	bool *d_neighs = NULL;
 	size_t size_neighs = (num_vertices)*sizeof(bool);
 	cudaMalloc((void **)&d_neighs, size_neighs);
+
+	//size_t size_neighs = (num_vertices)*sizeof(bool);
+	bool *h_neighs = (bool *)malloc(size_neighs);
 	
 	int num_ful_levels = floor( log2((double) (2*num_vertices - 1)));
 	long int ful_vertices = pow((int) 2,(int) num_ful_levels) - 1;
-	
-	cudaMemset(d_neighs, 0, size_neighs);
 
 	dim3 tpb2(32,32,1);
         dim3 bpg2(2,2,1);
+
+	cudaEventRecord(start);
 
 	int bfs_dist[4039];
 
@@ -754,14 +762,11 @@ int main ()
 
 	while(!isEmpty()){
 		int u = removeData();
-		//std::vector<int> adj;
-		size_t size_neighs = (num_vertices)*sizeof(bool);
-		bool *h_neighs = (bool *)malloc(size_neighs);
-		//Neighbours(u, num_vertices, num_hashes, num_bits, h_bits, h_neighs);
 		get_neighbours<<<bpg2,tpb2>>>(u, d_neighs, d_hash_value, d_bits, num_bits, num_hashes, num_vertices, ful_vertices);
+		//cudaDeviceSynchronize();
 		cudaMemcpy(h_neighs, d_neighs, size_neighs, cudaMemcpyDeviceToHost);
 
-		for (int i = 0; i < num_vertices-1; ++i) {
+		for (int i = 0; i < num_vertices; ++i) {
 			if (h_neighs[i] == 1){
 				if (bfs_dist[i] == INF){
 					bfs_dist[i] = bfs_dist[u] + 1;
@@ -770,13 +775,8 @@ int main ()
 			}
 		}
 	}
-	//if (DISPLAY_BFS_DIST) {
-	//	for (int i = 0; i < num_vertices; ++i) {
-	//		if (bfs_dist[i] != INF) {
-	//			cout << i << " - " << bfs_dist[i] << "\n";
-	//		}
-	//	}
-	//}
+
+	cudaEventRecord(stop);
 
 	//bool val = IsEdge(8, 7, num_vertices, num_hashes, num_bits, h_bits);
 	//if (val == 0) printf("It is NOT an edge.\n");
@@ -791,6 +791,11 @@ int main ()
 
 	//Neighbours(8, num_vertices, num_hashes, num_bits, h_bits, h_neighs);
 
+	cudaEventSynchronize(stop);
+	float milliseconds = 0;
+	cudaEventElapsedTime(&milliseconds, start, stop);
+
+	printf("time taken is %.5f\n", milliseconds);
 
 	cudaFree(d_neighs);
 	cudaFree(d_hash_value);
