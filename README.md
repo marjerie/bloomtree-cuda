@@ -1,5 +1,5 @@
 # bloomtree-cuda
-CUDA Implementation of BloomTree - A Space-Efficient Approximate Representation for Graphs 
+CUDA Implementation of Parallel BloomTree - A Space-Efficient Approximate Representation for Graphs 
 
 # References
 [C++ Implementation of BloomTree](https://github.com/Kavitha-G/bloomtree) <br>
