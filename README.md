@@ -25,6 +25,6 @@ nvcc BloomTree.cu -o BloomTree
 ```
 
 # References
-1. [C++ Implementation of BloomTree](https://github.com/Kavitha-G/bloomtree) <br>
+1. [C++ Implementation of Bloom Tree](https://github.com/Kavitha-G/bloomtree) <br>
 2. [CUDA Implementation for MurmurHash3](https://github.com/armon/cuda-hll) <br>
 3. [Calculation of Lowest Common Ancestor](https://www.researchgate.net/publication/295186423_Properties_of_the_Lowest_Common_Ancestor_in_a_Complete_Binary_Tree)
