@@ -13,7 +13,7 @@ InsertEdge(int num_vertices, int num_edges, int num_hashes, int num_bits, int *u
 GetNeighbours(int u, bool *bits, int num_vertices)
 IsEdge(int u, int v, bool *bits, int num_vertices, int num_hashes, int num_bits)
 ```
-The InsertEdge function parallelly all the edges present in the graph. GetNeighbours is used to obtain the neighbours of a given vertex. To check if an edge is present between two nodes, the function IsEdge is used.
+The InsertEdge function parallelly inserts all the edges present in the graph. GetNeighbours is used to obtain the neighbours of a given vertex. To check if an edge is present between two nodes, the function IsEdge is used.
 
 # Run
 
